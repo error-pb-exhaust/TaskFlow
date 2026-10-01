@@ -69,12 +69,46 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_by INT UNSIGNED NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  completed_at DATETIME NULL,
+  approved_by INT UNSIGNED NULL,
+  visibility ENUM('project','assignees') NOT NULL DEFAULT 'project',
+  team_id INT UNSIGNED NULL,
   CONSTRAINT fk_task_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   CONSTRAINT fk_task_assignee FOREIGN KEY (assignee_id) REFERENCES users(id) ON DELETE SET NULL,
   CONSTRAINT fk_task_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE,
   INDEX idx_tasks_status (status),
   INDEX idx_tasks_assignee (assignee_id),
   INDEX idx_tasks_due_date (due_date)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS project_members (
+  project_id INT UNSIGNED NOT NULL,
+  user_id INT UNSIGNED NOT NULL,
+  joined_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  project_role ENUM('member','manager') NOT NULL DEFAULT 'member',
+  PRIMARY KEY (project_id, user_id),
+  INDEX idx_project_member_user (user_id),
+  CONSTRAINT fk_member_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  CONSTRAINT fk_member_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS project_invitations (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  project_id INT UNSIGNED NOT NULL,
+  email VARCHAR(190) NOT NULL,
+  token_hash CHAR(64) NOT NULL UNIQUE,
+  invited_by INT UNSIGNED NOT NULL,
+  status ENUM('pending','accepted','cancelled') NOT NULL DEFAULT 'pending',
+  delivery_status ENUM('not_configured','sent','failed') NOT NULL DEFAULT 'not_configured',
+  expires_at DATETIME NOT NULL,
+  accepted_by INT UNSIGNED NULL,
+  accepted_at DATETIME NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_project_invite_email (project_id, email),
+  CONSTRAINT fk_project_invite_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  CONSTRAINT fk_project_invite_sender FOREIGN KEY (invited_by) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_project_invite_recipient FOREIGN KEY (accepted_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS task_comments (
@@ -114,4 +148,34 @@ CREATE TABLE IF NOT EXISTS notifications (
   CONSTRAINT fk_notification_task FOREIGN KEY (related_task_id) REFERENCES tasks(id) ON DELETE CASCADE,
   INDEX idx_notification_user_read (user_id, is_read),
   INDEX idx_notification_created_at (created_at)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS teams (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(150) NOT NULL,
+  owner_id INT UNSIGNED NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_team_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS team_members (
+  team_id INT UNSIGNED NOT NULL,
+  user_id INT UNSIGNED NOT NULL,
+  PRIMARY KEY (team_id, user_id),
+  CONSTRAINT fk_tm_team FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+  CONSTRAINT fk_tm_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS project_teams (
+  project_id INT UNSIGNED NOT NULL,
+  team_id INT UNSIGNED NOT NULL,
+  PRIMARY KEY (project_id, team_id),
+  CONSTRAINT fk_pt_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  CONSTRAINT fk_pt_team FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS task_assignees (
+  task_id INT UNSIGNED NOT NULL,
+  user_id INT UNSIGNED NOT NULL,
+  PRIMARY KEY (task_id, user_id),
+  INDEX idx_ta_user (user_id),
+  CONSTRAINT fk_ta_task FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+  CONSTRAINT fk_ta_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;

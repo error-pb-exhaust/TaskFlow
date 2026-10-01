@@ -12,8 +12,7 @@ $expiringInvites = (int) $pdo->query("SELECT COUNT(*) FROM invitations WHERE sta
 $overdueTasks = (int) $pdo->query("SELECT COUNT(*) FROM tasks WHERE due_date < CURDATE() AND status <> 'done'")->fetchColumn();
 
 $settings = $pdo->query('SELECT setting_key, setting_value FROM workspace_settings')->fetchAll(PDO::FETCH_KEY_PAIR);
-$securityAlerts = (($settings['require_2fa'] ?? '0') === '1' ? 0 : 1)
-    + (($settings['allow_guest_access'] ?? '1') === '1' ? 1 : 0);
+$securityAlerts = 1; // Two-factor authentication is not implemented.
 
 $activityStmt = $pdo->query("SELECT DATE(created_at) AS activity_date, COUNT(*) AS total FROM audit_logs WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 6 DAY) GROUP BY DATE(created_at)");
 $activityRows = $activityStmt->fetchAll();
@@ -33,10 +32,10 @@ jsonResponse([
         'active_users' => $activeUsers,
         'pending_invites' => $pendingInvites,
         'security_alerts' => $securityAlerts,
-        'system_health' => '100%',
+        'system_health' => 'Online',
     ],
     'attention' => [
-        'two_factor_disabled' => ($settings['require_2fa'] ?? '0') !== '1' ? $activeUsers : 0,
+        'two_factor_disabled' => $activeUsers,
         'expiring_invites' => $expiringInvites,
         'overdue_tasks' => $overdueTasks,
     ],

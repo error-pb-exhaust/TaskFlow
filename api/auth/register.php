@@ -8,6 +8,7 @@ $data = requestData();
 $name = cleanString($data['name'] ?? '', 100);
 $email = strtolower(cleanString($data['email'] ?? '', 190));
 $password = (string) ($data['password'] ?? '');
+$requestedRole = cleanString($data['account_type'] ?? 'member', 20);
 
 if (mb_strlen($name) < 2) {
     jsonResponse(['success' => false, 'message' => 'Name must contain at least 2 characters.'], 422);
@@ -18,26 +19,24 @@ if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
 if (strlen($password) < 8) {
     jsonResponse(['success' => false, 'message' => 'Password must contain at least 8 characters.'], 422);
 }
+if (!in_array($requestedRole, ['manager', 'member'], true)) {
+    jsonResponse(['success' => false, 'message' => 'Choose Manager or Team Member.'], 422);
+}
 
 try {
     $pdo = database();
     $pdo->beginTransaction();
 
-    $invitationStmt = $pdo->prepare("SELECT id, role FROM invitations WHERE email = ? AND status = 'pending' AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1");
-    $invitationStmt->execute([$email]);
-    $invitation = $invitationStmt->fetch();
-    $assignedRole = $invitation['role'] ?? 'member';
+    // Project invitations are accepted separately using their secret link.
+    $assignedRole = $requestedRole;
 
     $stmt = $pdo->prepare('INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)');
     $stmt->execute([$name, $email, password_hash($password, PASSWORD_DEFAULT), $assignedRole]);
     $userId = (int) $pdo->lastInsertId();
 
-    $project = $pdo->prepare('INSERT INTO projects (name, color, owner_id) VALUES (?, ?, ?)');
-    $project->execute(['My First Project', '#0073EA', $userId]);
-
-    if ($invitation) {
-        $accept = $pdo->prepare("UPDATE invitations SET status = 'accepted' WHERE id = ?");
-        $accept->execute([(int) $invitation['id']]);
+    if ($assignedRole === 'manager') {
+        $project = $pdo->prepare('INSERT INTO projects (name, color, owner_id) VALUES (?, ?, ?)');
+        $project->execute(['My First Project', '#0073EA', $userId]);
     }
 
     writeAuditLog($userId, 'Account registered', "$name created a TaskFlow account with the $assignedRole role.");
@@ -50,6 +49,7 @@ try {
         'success' => true,
         'message' => 'Account created successfully.',
         'user' => ['id' => $userId, 'name' => $name, 'email' => $email, 'role' => $assignedRole],
+        'csrf_token' => $_SESSION['csrf_token'],
     ], 201);
 } catch (PDOException $exception) {
     if (isset($pdo) && $pdo->inTransaction()) {

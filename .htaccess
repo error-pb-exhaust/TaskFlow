@@ -1,8 +1,9 @@
 Options -Indexes
 
-<FilesMatch "^(database\.sql|README\.txt)$">
+<FilesMatch "^(database\.sql|README\.txt|DATABASE_README\.md|DATABASE_SQL_README\.md|FIXES_AND_LIMITATIONS\.md|INVITATION_SETUP\.md|RELATIONSHIP_GUIDE\.md)$">
   Require all denied
 </FilesMatch>
+
 
 <IfModule mod_headers.c>
   Header always set X-Content-Type-Options "nosniff"

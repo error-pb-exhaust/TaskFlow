@@ -2,7 +2,13 @@
 declare(strict_types=1);
 
 if (session_status() !== PHP_SESSION_ACTIVE) {
+    ini_set('session.use_strict_mode', '1');
+    ini_set('session.cookie_httponly', '1');
+    ini_set('session.cookie_samesite', 'Lax');
     session_start();
+}
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
 require_once __DIR__ . '/database.php';
@@ -30,12 +36,21 @@ function requireMethod(string $method): void
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== strtoupper($method)) {
         jsonResponse(['success' => false, 'message' => 'Method not allowed.'], 405);
     }
+    if (strtoupper($method) === 'POST' && !hash_equals($_SESSION['csrf_token'], $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '')) {
+        jsonResponse(['success' => false, 'message' => 'Session verification failed. Refresh the page and try again.'], 403);
+    }
 }
 
 function currentUserId(): int
 {
     if (empty($_SESSION['user_id'])) {
         jsonResponse(['success' => false, 'message' => 'Please sign in first.'], 401);
+    }
+    $stmt = database()->prepare("SELECT id FROM users WHERE id = ? AND status = 'active' LIMIT 1");
+    $stmt->execute([(int) $_SESSION['user_id']]);
+    if (!$stmt->fetchColumn()) {
+        $_SESSION = [];
+        jsonResponse(['success' => false, 'message' => 'Your account is no longer active. Please sign in again.'], 401);
     }
     return (int) $_SESSION['user_id'];
 }
@@ -51,6 +66,15 @@ function requireAdmin(): array
         jsonResponse(['success' => false, 'message' => 'Administrator access is required.'], 403);
     }
     return $user;
+}
+
+function requireWritableAccount(int $userId): void
+{
+    $stmt = database()->prepare('SELECT role FROM users WHERE id = ?');
+    $stmt->execute([$userId]);
+    if ($stmt->fetchColumn() === 'guest') {
+        jsonResponse(['success' => false, 'message' => 'Guest accounts have read-only access.'], 403);
+    }
 }
 
 function writeAuditLog(int $userId, string $action, string $details): void

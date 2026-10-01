@@ -10,6 +10,7 @@
     <title>TaskFlow Product Experience</title>
     <link rel="stylesheet" href="./styles.css" />
     <script src="./app.js" defer></script>
+    <script src="./relations.js" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -250,7 +251,7 @@
               </article>
               <aside class="panel detail-info">
                 <h3>Task information</h3>
-                <dl><dt>Assignee</dt><dd><select id="detailAssigneeSelect" aria-label="Change assignee"></select></dd><dt>Reporter</dt><dd id="detailReporter">—</dd><dt>Project</dt><dd id="detailProject">—</dd><dt>Created</dt><dd id="detailCreated">—</dd><dt>Due date</dt><dd class="red-text" id="detailDue">—</dd></dl>
+                <div id="detailAssignmentControls"><label>Assign to team<select id="detailTeamSelect"></select></label><label>Visibility<select id="detailVisibilitySelect"><option value="project">All project members</option><option value="assignees">Assignees and managers only</option></select></label><button id="saveTaskAssignment" class="secondary-button" type="button">Save assignment and visibility</button></div><p id="taskApprovalNote"></p><dl><dt>Assignees</dt><dd><select id="detailAssigneeSelect" multiple size="4" aria-label="Change assignees"></select></dd><dt>Reporter</dt><dd id="detailReporter">—</dd><dt>Project</dt><dd id="detailProject">—</dd><dt>Created</dt><dd id="detailCreated">—</dd><dt>Due date</dt><dd class="red-text" id="detailDue">—</dd></dl>
                 <h3>Tags</h3><div class="tag-list"><span>UX Design</span><span>Homepage</span><span>Wireframe</span></div>
                 <h3>Recent activity</h3><div class="feed compact"><div><span class="avatar tiny yellow-bg">S</span><p><strong>Sadman Khan</strong> added a comment<small>1 hour ago</small></p></div><div><span class="avatar tiny blue-bg">A</span><p><strong>Anik Bowmik</strong> completed a subtask<small>3 hours ago</small></p></div><div><span class="avatar tiny purple-bg">T</span><p><strong>Towhidul Islam</strong> changed the due date<small>Yesterday</small></p></div></div>
               </aside>
@@ -290,7 +291,18 @@
           </section>
 
           <section class="app-view" id="view-team" data-title="Team" data-crumb="PEOPLE / TEAM">
-            <div class="section-heading"><div><h2>Team</h2><p>View members, roles, availability, and assigned work.</p></div><button class="primary-button" id="teamInviteButton">Invite member</button></div>
+            <div class="section-heading"><div><h2>Team</h2><p>Invite teammates by email. Assign tasks after they accept.</p></div><button class="primary-button" id="teamInviteButton">Invite teammate</button></div>
+            <form class="panel" id="projectTeamForm" style="padding:20px;margin-bottom:20px"><h3>Project team</h3><p>Choose your project and enter an email. They can create an account from the invitation link.</p><div class="form-grid"><label>My project<select id="teamProjectSelect" name="project_id" required></select></label><label>Teammate email<input name="email" type="email" placeholder="teammate@example.com" required /></label></div><button class="primary-button" type="submit">Send invitation</button><div id="projectInviteResult" role="status" style="margin-top:16px" hidden><p id="projectInviteMessage"></p><label>Invitation link<input id="projectInviteLink" type="text" readonly /></label><button id="copyProjectInvite" class="secondary-button" type="button">Copy link</button></div><div id="projectPendingInvites" style="margin-top:16px"></div><div id="projectTeamList" style="margin-top:16px"></div></form>
+            <section class="panel relationship-panel"><h3>Project roles and ownership</h3><label>Project<select id="relationsProjectSelect"></select></label><p id="relationsProjectSummary"></p><div id="relationsMembers"></div><button type="button" id="leaveProjectButton" class="secondary-button">Leave project</button></section>
+            <section class="panel relationship-panel"><h3>Reusable teams</h3><p>Build a team from people who accepted a project invitation. Add that team to other projects you manage. Existing task assignments stay unchanged when team membership changes.</p>
+              <form id="createReusableTeamForm" class="relation-row"><input name="name" required minlength="2" maxlength="150" placeholder="Team name, e.g. Design Team"><button class="primary-button" type="submit">Create team</button></form>
+              <label>Team<select id="reusableTeamSelect"></select></label><div id="reusableTeamPeople"></div>
+              <form id="addReusableMemberForm" class="relation-row"><input name="email" type="email" required placeholder="Accepted teammate's email"><button class="secondary-button" type="submit">Add to reusable team</button></form>
+              <form id="attachReusableTeamForm" class="relation-row"><select name="project_id" id="attachTeamProject" required></select><button class="secondary-button" type="submit">Add / sync team to project</button></form>
+              <button type="button" class="secondary-button" id="leaveReusableTeam">Leave reusable team</button>
+            </section>
+            <p id="autoRefreshStatus" class="form-help">Updates refresh automatically every 15 seconds while you are not editing.</p>
+
             <div class="metric-grid four"><article class="metric-card accent-blue"><div><span>Active members</span><strong id="teamActiveCount">0</strong><small>Enabled accounts</small></div></article><article class="metric-card accent-green"><div><span>Avg. workload</span><strong id="teamAverageCapacity">0%</strong><small>Based on open tasks</small></div></article><article class="metric-card accent-yellow"><div><span>Available today</span><strong id="teamAvailableCount">0</strong><small>Under 70% capacity</small></div></article><article class="metric-card accent-purple"><div><span>Roles</span><strong id="teamRoleCount">0</strong><small>Active role categories</small></div></article></div>
             <div class="team-layout">
               <article class="panel member-table"><header class="panel-header"><div><h3>Team directory</h3><p>Availability and current load</p></div><input class="small-search" id="teamSearch" placeholder="Search members..." /></header>
@@ -312,7 +324,7 @@
               <article class="panel"><header class="panel-header"><div><h3>Capacity overview</h3><p>Based on open assigned tasks</p></div></header><div class="capacity-list" id="databaseCapacityList"></div></article>
               <article class="panel"><header class="panel-header"><div><h3>Project allocation</h3><p>Share of open tasks</p></div></header><div class="allocation-list" id="databaseAllocationList"></div></article>
             </div>
-            <article class="panel weekly-workload"><header class="panel-header"><div><h3>Weekly workload by member</h3><p>Task count by day</p></div><div class="legend"><span><i class="green-soft"></i>Light load</span><span><i class="blue-soft"></i>Healthy</span><span><i class="yellow-soft"></i>Near capacity</span><span><i class="red-soft"></i>Overloaded</span></div></header>
+            <article class="panel weekly-workload"><header class="panel-header"><div><h3>Tasks due this week by member</h3><p>Open tasks grouped by actual due date</p></div><div class="legend"><span><i class="green-soft"></i>Light load</span><span><i class="blue-soft"></i>Healthy</span><span><i class="yellow-soft"></i>Near capacity</span><span><i class="red-soft"></i>Overloaded</span></div></header>
               <div class="heatmap" id="databaseWorkloadHeatmap"></div>
             </article>
           </section>
@@ -360,8 +372,8 @@
               <div class="role-cards"><article><i class="blue-bg">01</i><h3>Workspace Admin</h3><p>Full workspace, billing, and security access.</p></article><article><i class="purple-bg">02</i><h3>Project Manager</h3><p>Create projects, assign work, manage people.</p></article><article><i class="green-bg">03</i><h3>Member</h3><p>Complete assigned work and collaborate.</p></article><article><i class="yellow-bg">04</i><h3>Guest</h3><p>Limited access to invited projects.</p></article></div>
             </div>
             <div class="admin-panel" id="admin-governance">
-              <div class="governance-grid"><article class="governance-card"><i class="blue-bg">✓</i><em>Security</em><h3>2FA enforcement</h3><p>Require two-factor authentication for workspace members.</p><label class="toggle"><input id="require2faToggle" type="checkbox" /><span></span></label></article><article class="governance-card"><i class="purple-bg">◆</i><em>Data</em><h3>Retention rules</h3><p>Keep completed project data for the selected number of days.</p><label class="setting-field">Days<input id="retentionDays" type="number" min="30" max="3650" value="365" /></label></article><article class="governance-card"><i class="green-bg">↗</i><em>Access</em><h3>Guest access</h3><p>Allow limited guest accounts inside the workspace.</p><label class="toggle"><input id="allowGuestToggle" type="checkbox" /><span></span></label></article></div>
-              <div class="settings-actions"><button class="primary-button" id="saveAdminSettings">Save security settings</button></div>
+              <div class="governance-grid"><article class="governance-card"><i class="blue-bg">✓</i><em>Security</em><h3>2FA enforcement</h3><p>Planned; two-factor authentication is not implemented.</p><label class="toggle"><input id="require2faToggle" type="checkbox" disabled /><span></span></label></article><article class="governance-card"><i class="purple-bg">◆</i><em>Data</em><h3>Retention rules</h3><p>Planned; automatic deletion is not implemented.</p><label class="setting-field">Days<input id="retentionDays" type="number" min="30" max="3650" value="365" disabled /></label></article><article class="governance-card"><i class="green-bg">↗</i><em>Access</em><h3>Guest access</h3><p>Planned; guest restrictions are not implemented.</p><label class="toggle"><input id="allowGuestToggle" type="checkbox" disabled /><span></span></label></article></div>
+              <div class="settings-actions"><button class="primary-button" id="saveAdminSettings" disabled>Settings planned</button></div>
               <article class="panel audit-log"><header class="panel-header"><div><h3>Recent audit activity</h3><p>Traceable login, member, task, and security changes</p></div><button class="secondary-button" id="exportAuditLog">Export CSV</button></header><div id="adminAuditList"><p class="admin-loading">Loading audit activity...</p></div></article>
             </div>
           </section>
@@ -396,9 +408,11 @@
       <form class="modal-card" id="taskForm">
         <header><div><p class="eyebrow">QUICK CREATE</p><h2>Create a task</h2></div><button type="button" class="icon-button" data-close-modal aria-label="Close">×</button></header>
         <label>Task name<input id="newTaskName" name="task_name" required placeholder="What needs to be done?" /></label>
-        <div class="form-grid"><label>Project<select name="project_id" id="taskProjectSelect"><option value="">Website Redesign</option></select></label><label>Status<select name="status"><option>To do</option><option>In progress</option><option>In review</option><option>Done</option></select></label></div>
+        <div class="form-grid"><label>Project<select name="project_id" id="taskProjectSelect"><option value="">Website Redesign</option></select></label><label>Status<select name="status"><option>To do</option><option>In progress</option><option>In review</option></select></label></div>
         <div class="form-grid"><label>Priority<select name="priority"><option>Medium</option><option>High</option><option>Low</option></select></label><label>Due date<input name="due_date" type="date" value="<?= date('Y-m-d', strtotime('+7 days')) ?>" /></label></div>
-        <label>Assignee<select name="assignee_id" id="taskAssigneeSelect"><option value="">Loading team...</option></select></label>
+        <label>Assign to team<select name="team_id" id="taskTeamSelect"><option value="">Choose people individually</option></select></label>
+        <label>Assignees<select name="assignee_ids[]" id="taskAssigneeSelect" multiple size="4" required></select><small>Use Ctrl / Command to select multiple people.</small></label>
+        <label>Visibility<select name="visibility"><option value="project">All project members</option><option value="assignees">Assignees and project managers only</option></select></label>
         <label>Description<textarea name="description" placeholder="Add useful context for the team."></textarea></label>
         <footer><button type="button" class="secondary-button" data-close-modal>Cancel</button><button class="primary-button" type="submit">Create task</button></footer>
       </form>
@@ -438,6 +452,7 @@
         <div class="auth-message" id="profileMessage" role="alert"></div>
         <label>Full name<input name="name" id="profileNameInput" required minlength="2" /></label>
         <label>Email address<input name="email" id="profileEmailInput" type="email" required /></label>
+        <label id="profileRoleRow">My role<select name="account_type" id="profileRoleSelect"><option value="member">Team Member</option><option value="manager">Project Manager</option></select></label>
         <hr />
         <p class="form-help">Leave the password fields empty if you do not want to change your password.</p>
         <label>Current password<input name="current_password" type="password" autocomplete="current-password" /></label>
@@ -483,6 +498,7 @@
           <label>Full name<input name="name" type="text" placeholder="Your name" required minlength="2" /></label>
           <label>Email address<input name="email" type="email" placeholder="you@example.com" required /></label>
           <label>Password<input name="password" type="password" placeholder="At least 8 characters" required minlength="8" /></label>
+          <label>I will work as<select name="account_type"><option value="member">Team Member</option><option value="manager">Project Manager</option></select></label>
           <button class="primary-button full-width" type="submit">Create account</button>
           <p class="login-footer">Already have an account? <button id="backToLoginButton" type="button">Sign in</button></p>
         </form>

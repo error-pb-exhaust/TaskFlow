@@ -33,7 +33,7 @@ try {
 
     unset($user['password_hash']);
     unset($user['status']);
-    jsonResponse(['success' => true, 'message' => 'Signed in successfully.', 'user' => $user]);
+    jsonResponse(['success' => true, 'message' => 'Signed in successfully.', 'user' => $user, 'csrf_token' => $_SESSION['csrf_token']]);
 } catch (PDOException $exception) {
     jsonResponse(['success' => false, 'message' => 'Database is not installed. Open install.php first.'], 503);
 }

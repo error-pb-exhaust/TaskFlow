@@ -25,16 +25,21 @@
   var signedInUser = null;
   var taskRequestNumber = 0;
   var adminAuditRows = [];
-  var workspaceData = { tasks: [], projects: [], members: [], activity: [] };
+  var workspaceData = { tasks: [], projects: [], members: [], memberships: [], teams: [], team_members: [], project_teams: [], activity: [] };
   var activeProjectFilter = "all";
   var selectedBoardProject = "all";
   var calendarCursor = new Date();
   var draggedTaskId = null;
   var currentOpenTask = null;
   var currentTaskDetails = { comments: [], checklist: [] };
+  var csrfToken = "";
 
   async function api(url, options) {
-    var response = await fetch(url, options || {});
+    options = options || {};
+    if (options.method && options.method.toUpperCase() !== "GET") {
+      options.headers = Object.assign({}, options.headers || {}, { "X-CSRF-Token": csrfToken });
+    }
+    var response = await fetch(url, options);
     var result;
     try {
       result = await response.json();
@@ -44,6 +49,7 @@
     if (!response.ok || !result.success) {
       throw new Error(result.message || "The request failed.");
     }
+    if (result.csrf_token) csrfToken = result.csrf_token;
     return result;
   }
 
@@ -56,7 +62,7 @@
   function escapeHtml(value) {
     var div = document.createElement("div");
     div.textContent = value == null ? "" : String(value);
-    return div.innerHTML;
+    return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 
   function formatStatus(status) {
@@ -301,33 +307,88 @@
     return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: date.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined });
   }
 
+  function projectPeople(projectId) {
+    return workspaceData.members.filter(function (member) { return member.status === "active" && member.role !== "guest" && workspaceData.memberships.some(function (link) { return Number(link.project_id) === Number(projectId) && Number(link.user_id) === Number(member.id); }); });
+  }
+  function fillAssignmentPeople(select, projectId, ids) {
+    select.innerHTML = projectPeople(projectId).map(function (member) { return '<option value="' + Number(member.id) + '">' + escapeHtml(member.name) + '</option>'; }).join("");
+    Array.from(select.options).forEach(function (option) { option.selected = ids.map(Number).includes(Number(option.value)); });
+  }
+  function fillAssignmentTeams(select, projectId, selected) {
+    select.innerHTML = '<option value="">Choose people individually</option>' + workspaceData.teams.filter(function (team) { return workspaceData.project_teams.some(function (link) { return Number(link.project_id) === Number(projectId) && Number(link.team_id) === Number(team.id); }); }).map(function (team) { return '<option value="' + Number(team.id) + '">' + escapeHtml(team.name) + '</option>'; }).join("");
+    select.value = selected ? String(selected) : "";
+  }
+  function syncTeamSelection(teamSelect, peopleSelect, projectId) {
+    var teamId = Number(teamSelect.value);
+    peopleSelect.disabled = !!teamId;
+    if (teamId) {
+      var ids = workspaceData.team_members.filter(function (link) { return Number(link.team_id) === teamId; }).map(function (link) { return Number(link.user_id); });
+      fillAssignmentPeople(peopleSelect, projectId, ids);
+    }
+  }
   function populateProjectSelectors() {
     var taskSelect = document.getElementById("taskProjectSelect");
     var boardSelect = document.getElementById("boardProjectSelect");
-    var activeProjects = workspaceData.projects.filter(function (project) { return project.status !== "archived"; });
-    var taskOptions = activeProjects.map(function (project) {
-      return '<option value="' + Number(project.id) + '">' + escapeHtml(project.name) + '</option>';
-    }).join("");
-    var boardOptions = activeProjects.map(function (project) {
-      return '<option value="' + Number(project.id) + '">' + escapeHtml(project.name) + '</option>';
-    }).join("");
-    if (taskSelect) {
-      var previous = taskSelect.value;
-      taskSelect.innerHTML = taskOptions || '<option value="">Create a project first</option>';
-      if (previous && taskSelect.querySelector('option[value="' + previous + '"]')) taskSelect.value = previous;
-    }
-    if (boardSelect) {
-      boardSelect.innerHTML = '<option value="all">All projects</option>' + boardOptions;
-      boardSelect.value = String(selectedBoardProject);
-    }
-    var assigneeSelect = document.getElementById("taskAssigneeSelect");
-    if (assigneeSelect) {
-      var selectedAssignee = assigneeSelect.value || (signedInUser ? String(signedInUser.id) : "");
-      assigneeSelect.innerHTML = workspaceData.members.filter(function (member) { return member.status === "active"; }).map(function (member) {
-        return '<option value="' + Number(member.id) + '">' + escapeHtml(member.name) + ' — ' + escapeHtml(adminRoleLabel(member.role)) + '</option>';
-      }).join("") || '<option value="">No active members</option>';
-      if (assigneeSelect.querySelector('option[value="' + selectedAssignee + '"]')) assigneeSelect.value = selectedAssignee;
-    }
+    var previous = taskSelect.value;
+    var projects = workspaceData.projects.filter(function (project) { return project.status !== "archived"; });
+    taskSelect.innerHTML = projects.filter(function (project) { return project.can_manage && project.status === "active"; }).map(function (project) { return '<option value="' + Number(project.id) + '">' + escapeHtml(project.name) + '</option>'; }).join("") || '<option value="">Create or manage a project first</option>';
+    if (Array.from(taskSelect.options).some(function (option) { return option.value === previous; })) taskSelect.value = previous;
+    boardSelect.innerHTML = '<option value="all">All projects</option>' + projects.map(function (project) { return '<option value="' + Number(project.id) + '">' + escapeHtml(project.name) + '</option>'; }).join("");
+    if (!projects.some(function(project){ return String(project.id) === String(selectedBoardProject); })) selectedBoardProject = "all";
+    boardSelect.value = selectedBoardProject;
+    var people = document.getElementById("taskAssigneeSelect");
+    var selected = Array.from(people.selectedOptions).map(function (option) { return Number(option.value); });
+    if (!selected.length && signedInUser) selected = [Number(signedInUser.id)];
+    fillAssignmentPeople(people, taskSelect.value, selected);
+    var teams = document.getElementById("taskTeamSelect");
+    fillAssignmentTeams(teams, taskSelect.value, teams.value);
+    syncTeamSelection(teams, people, taskSelect.value);
+  }
+
+  function renderProjectTeam() {
+    var select = document.getElementById("teamProjectSelect");
+    var list = document.getElementById("projectTeamList");
+    if (!signedInUser) return;
+    var current = select.value;
+    var managed = workspaceData.projects.filter(function (project) { return project.can_manage && project.status !== "archived"; });
+    select.innerHTML = managed.map(function (project) { return '<option value="' + Number(project.id) + '">' + escapeHtml(project.name) + '</option>'; }).join("");
+    if (managed.some(function (project) { return String(project.id) === current; })) select.value = current;
+    list.textContent = managed.length ? 'Accepted people and project roles are listed below.' : 'Create a project or ask its owner to make you a project manager.';
+    loadProjectInvitations(Number(select.value));
+  }
+
+  function showProjectInvitation(result) {
+    document.getElementById("projectInviteResult").hidden = false;
+    document.getElementById("projectInviteMessage").textContent = result.message;
+    document.getElementById("projectInviteLink").value = result.invitation_url;
+  }
+
+  var inviteListRequest = 0;
+  async function loadProjectInvitations(projectId) {
+    var requestId = ++inviteListRequest;
+    var target = document.getElementById("projectPendingInvites");
+    target.textContent = "";
+    if (!projectId) return;
+    try {
+      var result = await api("api/projects/members.php?project_id=" + encodeURIComponent(projectId));
+      if (requestId !== inviteListRequest) return;
+      target.innerHTML = (result.invitations || []).map(function (invite) {
+        var delivery = ({ sent: "Email submitted", failed: "Email failed", not_configured: "Share link manually" })[invite.delivery_status] || "Pending";
+        return '<div class="project-team-person"><span><b>' + escapeHtml(invite.email) + '</b><small> ' + (Number(invite.expired) ? 'Expired' : 'Pending acceptance') + ' · ' + delivery + '</small></span><span><button class="secondary-button" type="button" data-invite-resend="' + Number(invite.id) + '">Resend / new link</button> <button class="secondary-button" type="button" data-invite-cancel="' + Number(invite.id) + '">Cancel</button></span></div>';
+      }).join("");
+      target.querySelectorAll("[data-invite-resend], [data-invite-cancel]").forEach(function (button) {
+        button.addEventListener("click", async function () {
+          button.disabled = true;
+          var resend = button.hasAttribute("data-invite-resend");
+          try {
+            var response = await api("api/projects/members.php", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project_id: projectId, action: resend ? "resend" : "cancel", invitation_id: Number(resend ? button.dataset.inviteResend : button.dataset.inviteCancel) }) });
+            if (resend) showProjectInvitation(response);
+            else { document.getElementById("projectInviteResult").hidden = true; showToast("Invitation cancelled", response.message); }
+            await loadProjectInvitations(projectId);
+          } catch (error) { showToast("Invitation update failed", error.message); button.disabled = false; }
+        });
+      });
+    } catch (error) { if (requestId === inviteListRequest) target.textContent = error.message; }
   }
 
   function renderSidebarProjects() {
@@ -397,7 +458,11 @@
   }
 
   function boardTaskCard(task) {
-    return '<button type="button" draggable="true" class="kanban-card" data-board-task="' + Number(task.id) + '"><em class="priority ' + escapeHtml(task.priority) + '">' + escapeHtml(task.priority) + '</em><strong>' + escapeHtml(task.title) + '</strong><p>' + escapeHtml(task.description || task.project_name) + '</p><footer><span>' + escapeHtml(task.due_date ? shortDate(task.due_date) : "No deadline") + '</span><i class="avatar tiny blue-bg">' + escapeHtml((task.assignee_name || "U").charAt(0).toUpperCase()) + '</i></footer></button>';
+    return '<button type="button" draggable="' + (canEditTask(task) ? 'true' : 'false') + '" class="kanban-card" data-board-task="' + Number(task.id) + '"><em class="priority ' + escapeHtml(task.priority) + '">' + escapeHtml(task.priority) + '</em><strong>' + escapeHtml(task.title) + '</strong><p>' + escapeHtml(task.description || task.project_name) + '</p><footer><span>' + escapeHtml(task.due_date ? shortDate(task.due_date) : "No deadline") + '</span><i class="avatar tiny blue-bg">' + escapeHtml((task.assignee_name || "U").charAt(0).toUpperCase()) + '</i></footer></button>';
+  }
+
+  function canEditTask(task) {
+    return !!task.can_edit && (task.status !== "done" || !!task.can_manage);
   }
 
   function renderBoard() {
@@ -424,9 +489,9 @@
         var task = workspaceData.tasks.find(function (item) { return Number(item.id) === draggedTaskId; });
         if (!task || task.status === column.dataset.boardStatus) return;
         try {
-          await api("api/tasks/update.php", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: task.id, title: task.title, status: column.dataset.boardStatus, priority: task.priority, due_date: task.due_date, description: task.description || "" }) });
+          var moved = await api("api/tasks/update.php", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: task.id, status: column.dataset.boardStatus }) });
           await refreshWorkspace();
-          showToast("Task moved", task.title + " is now " + formatStatus(column.dataset.boardStatus) + ".");
+          showToast("Task moved", task.title + " is now " + formatStatus(moved.status) + ".");
         } catch (error) { showToast("Move failed", error.message); }
       });
     });
@@ -469,7 +534,8 @@
     if (!grid) return;
     grid.innerHTML = visible.map(function (project) {
       var progress = percent(project.completed_count, project.task_count);
-      return '<article class="project-card blue-card"><header><span class="project-icon" style="background:' + escapeHtml(project.color || "#4776e6") + '">' + escapeHtml(project.name.charAt(0).toUpperCase()) + '</span><div><h3>' + escapeHtml(project.name) + '</h3><em>' + escapeHtml(project.status) + '</em></div></header><p>' + escapeHtml(project.description || "No description yet.") + '</p><label>Progress <b>' + progress + '%</b><i><span style="width:' + progress + '%;background:' + escapeHtml(project.color || "#4776e6") + '"></span></i></label><footer><span><small>Deadline</small><b>' + escapeHtml(shortDate(project.deadline)) + '</b></span><span><small>Tasks</small><b>' + Number(project.task_count) + ' tasks</b></span><span><small>Owner</small><b>' + escapeHtml(project.owner_name) + '</b></span></footer><div class="project-controls"><select aria-label="Project status"><option value="active"' + (project.status === "active" ? " selected" : "") + '>Active</option><option value="complete"' + (project.status === "complete" ? " selected" : "") + '>Complete</option><option value="archived"' + (project.status === "archived" ? " selected" : "") + '>Archived</option></select><button class="secondary-button project-update-status" type="button" data-project-id="' + Number(project.id) + '">Save status</button><button class="secondary-button project-open-board" type="button" data-project-id="' + Number(project.id) + '">Open board</button></div></article>';
+      var canManage = !!project.can_manage;
+      return '<article class="project-card blue-card"><header><span class="project-icon" style="background:' + escapeHtml(project.color || "#4776e6") + '">' + escapeHtml(project.name.charAt(0).toUpperCase()) + '</span><div><h3>' + escapeHtml(project.name) + '</h3><em>' + escapeHtml(project.status) + '</em></div></header><p>' + escapeHtml(project.description || "No description yet.") + '</p><label>Progress <b>' + progress + '%</b><i><span style="width:' + progress + '%;background:' + escapeHtml(project.color || "#4776e6") + '"></span></i></label><footer><span><small>Deadline</small><b>' + escapeHtml(shortDate(project.deadline)) + '</b></span><span><small>Tasks</small><b>' + Number(project.task_count) + ' tasks</b></span><span><small>Owner</small><b>' + escapeHtml(project.owner_name) + '</b></span></footer><div class="project-controls">' + (canManage ? '<select aria-label="Project status"><option value="active"' + (project.status === "active" ? " selected" : "") + '>Active</option><option value="complete"' + (project.status === "complete" ? " selected" : "") + '>Complete</option><option value="archived"' + (project.status === "archived" ? " selected" : "") + '>Archived</option></select><button class="secondary-button project-update-status" type="button" data-project-id="' + Number(project.id) + '">Save status</button>' : '') + '<button class="secondary-button project-open-board" type="button" data-project-id="' + Number(project.id) + '">Open board</button></div></article>';
     }).join("") || '<p class="database-empty">No projects match this filter.</p>';
     grid.querySelectorAll(".project-update-status").forEach(function (button) {
       button.addEventListener("click", async function () {
@@ -518,7 +584,9 @@
     var allocation = document.getElementById("databaseAllocationList");
     if (allocation) allocation.innerHTML = workspaceData.projects.filter(function (project) { return project.status === "active"; }).map(function (project) { var count = openTasks.filter(function (task) { return Number(task.project_id) === Number(project.id); }).length; return '<label><span><i style="background:' + escapeHtml(project.color || "#4776e6") + '"></i>' + escapeHtml(project.name) + '<b>' + count + ' tasks</b></span><i><b style="width:' + percent(count, Math.max(openTasks.length, 1)) + '%;background:' + escapeHtml(project.color || "#4776e6") + '"></b></i></label>'; }).join("") || '<p class="database-empty">No active project allocation.</p>';
     var heatmap = document.getElementById("databaseWorkloadHeatmap");
-    if (heatmap) heatmap.innerHTML = '<div class="heatmap-head"><b>Member</b><b>Mon</b><b>Tue</b><b>Wed</b><b>Thu</b><b>Fri</b></div>' + members.map(function (member) { var open = Number(member.open_tasks || 0); return '<div class="heatmap-row"><b>' + escapeHtml(member.name) + '</b>' + [0,1,2,3,4].map(function (day) { var value = Math.floor(open / 5) + (day < open % 5 ? 1 : 0); var level = value >= 3 ? "red-soft" : value === 2 ? "yellow-soft" : value === 1 ? "blue-soft" : "green-soft"; return '<span class="' + level + '">' + value + '</span>'; }).join("") + '</div>'; }).join("");
+    var monday = new Date(); monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+    var weekdays = [0, 1, 2, 3, 4].map(function (offset) { var day = new Date(monday); day.setDate(day.getDate() + offset); return localDateKey(day); });
+    if (heatmap) heatmap.innerHTML = '<div class="heatmap-head"><b>Member</b><b>Mon</b><b>Tue</b><b>Wed</b><b>Thu</b><b>Fri</b></div>' + members.map(function (member) { return '<div class="heatmap-row"><b>' + escapeHtml(member.name) + '</b>' + weekdays.map(function (date) { var value = workspaceData.tasks.filter(function (task) { return task.assignee_ids.map(Number).includes(Number(member.id)) && task.due_date === date && task.status !== "done"; }).length; var level = value >= 3 ? "red-soft" : value === 2 ? "yellow-soft" : value === 1 ? "blue-soft" : "green-soft"; return '<span class="' + level + '">' + value + '</span>'; }).join("") + '</div>'; }).join("");
   }
 
   function renderReports() {
@@ -532,7 +600,7 @@
     var today = localDateKey(new Date());
     var completedTasks = tasks.filter(function (task) { return task.status === "done"; });
     var overdue = tasks.filter(function (task) { return task.due_date && task.due_date < today && task.status !== "done"; });
-    var onTime = completedTasks.filter(function (task) { return !task.due_date || String(task.updated_at).slice(0, 10) <= task.due_date; }).length;
+    var onTime = completedTasks.filter(function (task) { return !task.due_date || (task.completed_at && String(task.completed_at).slice(0, 10) <= task.due_date); }).length;
     setText("reportCompleted", completedTasks.length);
     setText("reportProductivity", percent(completedTasks.length, tasks.length) + "%");
     setText("reportOverdue", overdue.length);
@@ -573,12 +641,17 @@
     renderWorkload();
     renderReports();
     renderActivity();
+    renderProjectTeam();
+    if (window.renderRelations) window.renderRelations(workspaceData, signedInUser);
   }
 
+  var workspaceRequestNumber = 0;
   async function loadWorkspaceData() {
+    var requestNumber = ++workspaceRequestNumber;
     try {
       var result = await api("api/workspace/data.php");
-      workspaceData = { tasks: result.tasks || [], projects: result.projects || [], members: result.members || [], activity: result.activity || [] };
+      if (requestNumber !== workspaceRequestNumber) return;
+      workspaceData = { tasks: result.tasks || [], projects: result.projects || [], members: result.members || [], memberships: result.memberships || [], teams: result.teams || [], team_members: result.team_members || [], project_teams: result.project_teams || [], activity: result.activity || [] };
       renderWorkspace();
     } catch (error) {
       showToast("Workspace data unavailable", error.message);
@@ -606,8 +679,17 @@
     setText("detailCreated", formatAdminDate(task.created_at));
     setText("detailDue", shortDate(task.due_date));
     var detailAssignee = document.getElementById("detailAssigneeSelect");
-    detailAssignee.innerHTML = workspaceData.members.filter(function (member) { return member.status === "active"; }).map(function (member) { return '<option value="' + Number(member.id) + '">' + escapeHtml(member.name) + '</option>'; }).join("");
-    detailAssignee.value = String(task.assignee_id || "");
+    fillAssignmentPeople(detailAssignee, task.project_id, task.assignee_ids || []);
+    var teamSelect = document.getElementById("detailTeamSelect");
+    fillAssignmentTeams(teamSelect, task.project_id, task.team_id);
+    detailAssignee.disabled = !task.can_manage || !!task.team_id;
+    teamSelect.disabled = !task.can_manage;
+    document.getElementById("detailVisibilitySelect").value = task.visibility;
+    document.getElementById("detailAssignmentControls").hidden = !task.can_manage;
+    var completeButton = document.getElementById("markComplete");
+    completeButton.disabled = !canEditTask(task);
+    completeButton.textContent = task.status === "done" ? (task.can_manage ? "Reopen task" : "Approved") : task.can_approve ? "Approve task" : "Submit for review";
+    document.getElementById("taskApprovalNote").textContent = task.status === "done" ? (task.approved_by ? "Approved by a project manager." : "Completed before approval tracking was enabled.") : task.status === "review" ? "Awaiting a project manager's approval." : "Assignees submit their work; project managers approve completion.";
 
     var done = currentTaskDetails.checklist.filter(function (item) { return Number(item.is_completed) === 1; }).length;
     var total = currentTaskDetails.checklist.length;
@@ -622,6 +704,7 @@
     document.getElementById("drawerChecklistList").innerHTML = checklistHtml;
     document.getElementById("taskChecklistList").innerHTML = checklistHtml;
     document.querySelectorAll(".live-checklist-item").forEach(function (input) {
+      input.disabled = !canEditTask(task);
       input.addEventListener("change", async function () {
         try {
           await api("api/tasks/checklist.php", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task_id: task.id, action: "toggle", item_id: Number(input.dataset.checklistId), is_completed: input.checked }) });
@@ -682,13 +765,15 @@
     list.innerHTML = tasks.map(function (task) {
       var due = task.due_date || "No date";
       var initial = (task.assignee_name || "U").charAt(0).toUpperCase();
+      var editable = canEditTask(task);
+      var removable = !!task.can_manage;
       return '<div class="task-row database-task-row" data-database-task="' + Number(task.id) + '">' +
-        '<button class="check database-complete" type="button" title="Mark complete">' + (task.status === "done" ? "✓" : "") + '</button>' +
+        '<button class="check database-complete" type="button" title="Submit for review, approve, or reopen"' + (editable ? '' : ' disabled') + '>' + (task.status === "done" ? "✓" : "") + '</button>' +
         '<span><strong>' + escapeHtml(task.title) + '</strong><small>' + escapeHtml(task.project_name) + ' • ' + escapeHtml(formatStatus(task.status)) + '</small></span>' +
         '<em class="priority ' + escapeHtml(task.priority) + '">' + escapeHtml(task.priority.charAt(0).toUpperCase() + task.priority.slice(1)) + '</em>' +
         '<span class="owner"><i class="avatar tiny blue-bg">' + escapeHtml(initial) + '</i>' + escapeHtml(task.assignee_name || "Unassigned") + '</span>' +
         '<time>' + escapeHtml(due) + '</time>' +
-        '<span class="task-actions"><select class="database-status" aria-label="Change task status"><option value="backlog"' + (task.status === "backlog" ? " selected" : "") + '>Backlog</option><option value="todo"' + (task.status === "todo" ? " selected" : "") + '>To do</option><option value="progress"' + (task.status === "progress" ? " selected" : "") + '>In progress</option><option value="review"' + (task.status === "review" ? " selected" : "") + '>In review</option><option value="done"' + (task.status === "done" ? " selected" : "") + '>Done</option></select><button class="database-delete" type="button" title="Delete task">Delete</button></span>' +
+        '<span class="task-actions"><select class="database-status" aria-label="Change task status"' + (editable ? '' : ' disabled') + '><option value="backlog"' + (task.status === "backlog" ? " selected" : "") + '>Backlog</option><option value="todo"' + (task.status === "todo" ? " selected" : "") + '>To do</option><option value="progress"' + (task.status === "progress" ? " selected" : "") + '>In progress</option><option value="review"' + (task.status === "review" ? " selected" : "") + '>In review</option><option value="done"' + (task.status === "done" ? " selected" : "") + '>Done</option></select>' + (removable ? '<button class="database-delete" type="button" title="Delete task">Delete</button>' : '') + '</span>' +
       '</div>';
     }).join("");
 
@@ -706,13 +791,10 @@
         var task = tasks.find(function (item) { return Number(item.id) === Number(row.dataset.databaseTask); });
         if (!task) return;
         try {
-          await api("api/tasks/update.php", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id: task.id, title: task.title, status: "done", priority: task.priority, due_date: task.due_date, description: task.description || "" })
-          });
+          var next = task.status === "done" ? "progress" : task.can_manage && task.status === "review" ? "done" : "review";
+          var result = await api("api/tasks/update.php", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: task.id, status: next }) });
           await refreshWorkspace();
-          showToast("Task completed", task.title + " is now done.");
+          showToast("Task updated", result.message);
         } catch (error) {
           showToast("Update failed", error.message);
         }
@@ -726,9 +808,9 @@
         if (!task) return;
         select.disabled = true;
         try {
-          await api("api/tasks/update.php", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: task.id, title: task.title, status: select.value, priority: task.priority, due_date: task.due_date, description: task.description || "" }) });
+          var updated = await api("api/tasks/update.php", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: task.id, status: select.value }) });
           await refreshWorkspace();
-          showToast("Status updated", task.title + " is now " + formatStatus(select.value) + ".");
+          showToast("Status updated", task.title + " is now " + formatStatus(updated.status) + ".");
         } catch (error) { showToast("Update failed", error.message); select.disabled = false; }
       });
     });
@@ -832,7 +914,6 @@
   function openModal() {
     populateProjectSelectors();
     var assigneeSelect = document.getElementById("taskAssigneeSelect");
-    if (assigneeSelect && signedInUser && assigneeSelect.querySelector('option[value="' + signedInUser.id + '"]')) assigneeSelect.value = String(signedInUser.id);
     setExpanded(modal, true);
     body.style.overflow = "hidden";
     window.setTimeout(function () {
@@ -876,6 +957,7 @@
     closeDrawer();
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (viewName === "admin") loadAdminTab("overview");
+    if (viewName === "team" && signedInUser) loadWorkspaceData();
   }
 
   document.querySelectorAll("[data-view]").forEach(function (button) {
@@ -936,6 +1018,7 @@
   });
 
   function openProjectModal() {
+    if (!signedInUser || !["manager", "admin"].includes(signedInUser.role)) { showToast("Manager role needed", "Choose Project Manager in your profile first."); return; }
     showAuthMessage(document.getElementById("projectMessage"), "");
     setExpanded(projectModal, true);
     body.style.overflow = "hidden";
@@ -988,11 +1071,30 @@
   });
 
   document.getElementById("teamSearch").addEventListener("input", function () { renderTeam(this.value); });
+  document.getElementById("teamProjectSelect").addEventListener("change", function () { document.getElementById("projectInviteResult").hidden = true; renderProjectTeam(); });
+  document.getElementById("copyProjectInvite").addEventListener("click", async function () {
+    var input = document.getElementById("projectInviteLink");
+    try { await navigator.clipboard.writeText(input.value); showToast("Copied", "Share the invitation link with the intended teammate."); }
+    catch (_) { input.focus(); input.select(); showToast("Copy the link", "Press Ctrl+C or Command+C to copy the selected link."); }
+  });
+  document.getElementById("taskProjectSelect").addEventListener("change", populateProjectSelectors);
+  document.getElementById("projectTeamForm").addEventListener("submit", async function (event) {
+    event.preventDefault();
+    var form = event.currentTarget;
+    var button = form.querySelector('[type="submit"]');
+    button.disabled = true;
+    try {
+      var result = await api("api/projects/members.php", { method: "POST", body: new FormData(form) });
+      form.elements.email.value = "";
+      await refreshWorkspace();
+      showProjectInvitation(result);
+      showToast("Invitation created", "The teammate can join after signing in or creating an account.");
+    } catch (error) { showToast("Could not invite teammate", error.message); }
+    finally { button.disabled = false; }
+  });
   document.getElementById("teamInviteButton").addEventListener("click", function () {
-    if (!signedInUser || signedInUser.role !== "admin") { showToast("Administrator required", "Only an administrator can create member invitations."); return; }
-    showAuthMessage(document.getElementById("inviteMessage"), "");
-    setExpanded(inviteModal, true);
-    body.style.overflow = "hidden";
+    document.getElementById("projectTeamForm").scrollIntoView({ behavior: "smooth" });
+    document.querySelector('#projectTeamForm input[name="email"]').focus();
   });
   document.getElementById("refreshActivity").addEventListener("click", async function () { await loadWorkspaceData(); showToast("Activity refreshed", "The newest database activity is visible."); });
 
@@ -1032,6 +1134,8 @@
     setExpanded(profilePopover, false);
     document.getElementById("profileNameInput").value = signedInUser ? signedInUser.name : "";
     document.getElementById("profileEmailInput").value = signedInUser ? signedInUser.email : "";
+    document.getElementById("profileRoleRow").style.display = signedInUser && (signedInUser.role === "admin" || signedInUser.role === "guest") ? "none" : "block";
+    document.getElementById("profileRoleSelect").value = signedInUser && signedInUser.role === "manager" ? "manager" : "member";
     showAuthMessage(document.getElementById("profileMessage"), "");
     setExpanded(profileModal, true);
     body.style.overflow = "hidden";
@@ -1078,16 +1182,17 @@
     } catch (error) { showToast("Checklist failed", error.message); }
   });
 
-  document.getElementById("detailAssigneeSelect").addEventListener("change", async function () {
-    if (!currentOpenTask) return;
-    var select = this;
-    select.disabled = true;
+  document.getElementById("taskTeamSelect").addEventListener("change", function () { syncTeamSelection(this, document.getElementById("taskAssigneeSelect"), document.getElementById("taskProjectSelect").value); });
+  document.getElementById("detailTeamSelect").addEventListener("change", function () { if (currentOpenTask) syncTeamSelection(this, document.getElementById("detailAssigneeSelect"), currentOpenTask.project_id); });
+  document.getElementById("saveTaskAssignment").addEventListener("click", async function () {
+    if (!currentOpenTask || !currentOpenTask.can_manage) return;
+    var button = this; button.disabled = true;
     try {
-      await api("api/tasks/update.php", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: currentOpenTask.id, title: currentOpenTask.title, status: currentOpenTask.status, priority: currentOpenTask.priority, due_date: currentOpenTask.due_date, description: currentOpenTask.description || "", assignee_id: Number(select.value) }) });
-      await Promise.all([refreshWorkspace(), loadNotifications()]);
-      await loadTaskDetails(currentOpenTask.id);
-      showToast("Assignee updated", "The task assignment was saved.");
-    } catch (error) { showToast("Assignment failed", error.message); select.value = String(currentOpenTask.assignee_id || ""); } finally { select.disabled = false; }
+      var ids = Array.from(document.getElementById("detailAssigneeSelect").selectedOptions).map(function (option) { return Number(option.value); });
+      await api("api/tasks/update.php", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: currentOpenTask.id, assignee_ids: ids, team_id: Number(document.getElementById("detailTeamSelect").value) || null, visibility: document.getElementById("detailVisibilitySelect").value }) });
+      await refreshWorkspace(); await loadTaskDetails(currentOpenTask.id);
+      showToast("Assignment saved", "Assignees and visibility were updated.");
+    } catch (error) { showToast("Assignment failed", error.message); } finally { button.disabled = false; }
   });
 
   document.getElementById("inviteForm").addEventListener("submit", async function (event) {
@@ -1136,18 +1241,15 @@
     }
   });
 
-  document.getElementById("markComplete").addEventListener("click", async function (event) {
-    var button = event.currentTarget;
-    if (!currentOpenTask) { showToast("Open a live task", "Select a task from My Tasks, Board, or Calendar first."); return; }
-    button.disabled = true;
+  document.getElementById("markComplete").addEventListener("click", async function () {
+    if (!currentOpenTask) return;
+    var button = this; button.disabled = true;
     try {
-      await api("api/tasks/update.php", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: currentOpenTask.id, title: currentOpenTask.title, status: "done", priority: currentOpenTask.priority, due_date: currentOpenTask.due_date, description: currentOpenTask.description || "" }) });
-      button.textContent = "Completed ✓";
-      button.classList.remove("primary-button");
-      button.classList.add("secondary-button");
-      await refreshWorkspace();
-      showToast("Task completed", "Progress has been updated across TaskFlow.");
-    } catch (error) { showToast("Update failed", error.message); } finally { button.disabled = false; }
+      var next = currentOpenTask.status === "done" ? "progress" : currentOpenTask.can_approve ? "done" : "review";
+      var result = await api("api/tasks/update.php", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: currentOpenTask.id, status: next }) });
+      await refreshWorkspace(); await loadTaskDetails(currentOpenTask.id);
+      showToast("Task updated", result.message);
+    } catch (error) { showToast("Update failed", error.message); } finally { button.disabled = !currentOpenTask || !canEditTask(currentOpenTask); }
   });
 
   document.getElementById("signOutButton").addEventListener("click", async function () {
@@ -1159,6 +1261,7 @@
     }
     setExpanded(profilePopover, false);
     signedInUser = null;
+    csrfToken = "";
     setExpanded(login, true);
     body.style.overflow = "hidden";
   });
@@ -1183,6 +1286,7 @@
     var message = document.getElementById("loginMessage");
     showAuthMessage(message, "");
     try {
+      if (!csrfToken) await api("api/auth/me.php");
       var result = await api("api/auth/login.php", { method: "POST", body: new FormData(form) });
       updateUserProfile(result.user);
       setExpanded(login, false);
@@ -1211,12 +1315,13 @@
     var message = document.getElementById("registerMessage");
     showAuthMessage(message, "");
     try {
+      if (!csrfToken) await api("api/auth/me.php");
       var result = await api("api/auth/register.php", { method: "POST", body: new FormData(form) });
       updateUserProfile(result.user);
       setExpanded(register, false);
       body.style.overflow = "";
       await Promise.all([refreshWorkspace(), loadNotifications()]);
-      showToast("Welcome, " + result.user.name, "Your account and first project are ready.");
+      showToast("Welcome, " + result.user.name, result.user.role === "manager" ? "Your first project is ready." : "Ask a manager to add you to a project.");
     } catch (error) {
       showAuthMessage(message, error.message);
     }
@@ -1334,6 +1439,19 @@
   window.addEventListener("resize", function () {
     if (window.innerWidth > 720) closeSidebar();
   });
+
+  window.taskflow = { api: api, refresh: refreshWorkspace, toast: showToast };
+  var autoSyncRunning = false;
+  window.setInterval(async function () {
+    var focused = document.activeElement;
+    if (!signedInUser || document.hidden || autoSyncRunning || document.querySelector(".modal-backdrop.open") || (focused && /^(INPUT|SELECT|TEXTAREA)$/.test(focused.tagName))) return;
+    autoSyncRunning = true;
+    try {
+      await refreshWorkspace();
+      if (currentOpenTask && (drawer.classList.contains("open") || lastView === "task-detail")) await loadTaskDetails(currentOpenTask.id);
+      document.getElementById("autoRefreshStatus").textContent = "Last refreshed " + new Date().toLocaleTimeString() + ". Updates refresh every 15 seconds while you are not editing.";
+    } finally { autoSyncRunning = false; }
+  }, 15000);
 
   updateClock();
   window.setInterval(updateClock, 1000);

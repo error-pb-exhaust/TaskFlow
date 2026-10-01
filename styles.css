@@ -883,3 +883,14 @@ small { color: var(--muted); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+.project-team-person { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 0; border-bottom:1px solid #e7eaf0; }
+.project-team-person small { color:#667085; overflow-wrap:anywhere; }
+
+.relationship-panel { padding:22px; margin:18px 0; }
+.relationship-panel label { display:block; margin:12px 0; }
+.relationship-panel select,.relationship-panel input,#detailAssignmentControls select { padding:10px; border:1px solid #ccd5e3; border-radius:7px; max-width:100%; }
+.relation-row { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:15px 0; }
+.relation-row input,.relation-row select { flex:1; min-width:170px; }
+#taskAssigneeSelect,#detailAssigneeSelect { height:auto; min-height:110px; }
+#detailAssignmentControls label { display:block; margin-bottom:12px; }
+.project-team-person { flex-wrap:wrap; }

@@ -3,6 +3,12 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/config/database.php';
 
+// The installer creates a known demo account; it must not be reachable remotely.
+if (!in_array($_SERVER['REMOTE_ADDR'] ?? '', ['127.0.0.1', '::1'], true)) {
+    http_response_code(403);
+    exit('Run the installer from localhost only.');
+}
+
 $message = '';
 $error = '';
 
@@ -37,6 +43,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!in_array('deadline', $projectColumns, true)) {
             $pdo->exec('ALTER TABLE projects ADD deadline DATE NULL AFTER status');
         }
+        $taskColumns = $pdo->query('SHOW COLUMNS FROM tasks')->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('completed_at', $taskColumns, true)) {
+            $pdo->exec('ALTER TABLE tasks ADD completed_at DATETIME NULL AFTER updated_at');
+            $pdo->exec("UPDATE tasks SET completed_at = updated_at WHERE status = 'done'");
+        }
+
+        if (!in_array('approved_by', $taskColumns, true)) $pdo->exec('ALTER TABLE tasks ADD approved_by INT UNSIGNED NULL');
+        if (!in_array('visibility', $taskColumns, true)) {
+            $pdo->exec("ALTER TABLE tasks ADD visibility ENUM('project','assignees') NOT NULL DEFAULT 'project'");
+        }
+        if (!in_array('team_id', $taskColumns, true)) $pdo->exec('ALTER TABLE tasks ADD team_id INT UNSIGNED NULL');
+        $memberColumns = $pdo->query('SHOW COLUMNS FROM project_members')->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('project_role', $memberColumns, true)) $pdo->exec("ALTER TABLE project_members ADD project_role ENUM('member','manager') NOT NULL DEFAULT 'member'");
 
         $pdo->exec("INSERT IGNORE INTO workspace_settings (setting_key, setting_value) VALUES
           ('require_2fa', '0'),
@@ -65,13 +84,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             foreach ($tasks as $task) {
                 $seed->execute([$task[0], $projectId, $task[1], $task[2], $task[3], $task[4], $userId, $userId]);
             }
+            $pdo->prepare("UPDATE tasks SET completed_at = NOW() WHERE project_id = ? AND status = 'done' AND completed_at IS NULL")->execute([$projectId]);
 
             $audit = $pdo->prepare('INSERT INTO audit_logs (user_id, action, details, ip_address) VALUES (?, ?, ?, ?)');
             $audit->execute([$userId, 'Workspace installed', 'TaskFlow database and administrator account created.', $_SERVER['REMOTE_ADDR'] ?? null]);
         }
 
+        $migrated = $pdo->query("SELECT setting_value FROM workspace_settings WHERE setting_key = 'relations_v2'")->fetchColumn();
+        if (!$migrated) {
+            $pdo->beginTransaction();
+            $pdo->exec('INSERT IGNORE INTO task_assignees (task_id, user_id) SELECT id, assignee_id FROM tasks WHERE assignee_id IS NOT NULL');
+            $pdo->exec('INSERT IGNORE INTO project_members (project_id, user_id) SELECT t.project_id, t.assignee_id FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.assignee_id IS NOT NULL AND t.assignee_id <> p.owner_id');
+            $pdo->exec("INSERT INTO workspace_settings (setting_key, setting_value) VALUES ('relations_v2', '1')");
+            $pdo->commit();
+        }
         $message = 'Installation completed. You can now sign in.';
     } catch (Throwable $exception) {
+        if (isset($pdo) && $pdo->inTransaction()) $pdo->rollBack();
         $error = 'Installation failed: ' . $exception->getMessage();
     }
 }

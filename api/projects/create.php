@@ -4,6 +4,11 @@ declare(strict_types=1);
 require_once __DIR__ . '/../../config/bootstrap.php';
 requireMethod('POST');
 $userId = currentUserId();
+$roleStmt = database()->prepare('SELECT role FROM users WHERE id = ?');
+$roleStmt->execute([$userId]);
+if (!in_array($roleStmt->fetchColumn(), ['manager', 'admin'], true)) {
+    jsonResponse(['success' => false, 'message' => 'Choose Manager in your profile to create projects.'], 403);
+}
 $data = requestData();
 
 $name = cleanString($data['name'] ?? '', 150);
@@ -17,13 +22,13 @@ if (mb_strlen($name) < 2) {
 if (!preg_match('/^#[0-9A-Fa-f]{6}$/', $color)) {
     $color = '#0073EA';
 }
-if ($deadline !== null && !DateTime::createFromFormat('Y-m-d', $deadline)) {
+if ($deadline !== null && (!($date = DateTime::createFromFormat('!Y-m-d', $deadline)) || $date->format('Y-m-d') !== $deadline)) {
     jsonResponse(['success' => false, 'message' => 'Project deadline is invalid.'], 422);
 }
 
 $pdo = database();
-$duplicate = $pdo->prepare("SELECT id FROM projects WHERE name = ? AND status <> 'archived' LIMIT 1");
-$duplicate->execute([$name]);
+$duplicate = $pdo->prepare("SELECT id FROM projects WHERE name = ? AND owner_id = ? AND status <> 'archived' LIMIT 1");
+$duplicate->execute([$name, $userId]);
 if ($duplicate->fetch()) {
     jsonResponse(['success' => false, 'message' => 'An active project already uses this name.'], 409);
 }
